@@ -18,6 +18,7 @@ jobs:
           uname -m
           sysctl -n machdep.cpu.brand_string || true
           sysctl kern.hv_support || true
+          ls -d /Applications/Xcode*.app 2>/dev/null | head -2 || true
           df -h / | tail -1
       - name: 安装 Android SDK
         run: |
@@ -63,8 +64,12 @@ jobs:
           hw.audioInput=no
           hw.audioOutput=no
           CFG
+          export ANDROID_HOME=$ANDROID_SDK_ROOT
           $ANDROID_SDK_ROOT/emulator/emulator -list-avds
-          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd t34 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect > /tmp/emu.log 2>&1 &
+          # 第166轮修：emulator 找不到 SDK root → 显式给 -sysdir，并把 SDK home 写进环境
+          nohup env ANDROID_HOME=$ANDROID_SDK_ROOT ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
+            $ANDROID_SDK_ROOT/emulator/emulator -avd t34 -sysdir $ANDROID_SDK_ROOT \
+            -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect > /tmp/emu.log 2>&1 &
           adb start-server
           for i in $(seq 1 90); do
             B=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
