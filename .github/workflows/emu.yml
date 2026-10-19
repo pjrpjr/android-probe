@@ -1,0 +1,82 @@
+name: emu
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: inline python to run
+        required: false
+        default: ""
+jobs:
+  probe:
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: 环境
+        run: |
+          sw_vers
+          uname -m
+          sysctl -n machdep.cpu.brand_string || true
+          sysctl kern.hv_support || true
+          df -h / | tail -1
+      - name: 安装 Android SDK
+        run: |
+          set -e
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          cd $ANDROID_SDK_ROOT/cmdline-tools
+          curl -sSLo t.zip https://dl.google.com/android/repository/commandlinetools-mac-11076708_latest.zip
+          unzip -q -o t.zip && (mv cmdline-tools latest 2>/dev/null || true)
+          export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH
+          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses >/dev/null 2>&1 || true
+          sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "emulator" "platforms;android-34" "system-images;android-34;google_apis;arm64-v8a"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/emulator" >> $GITHUB_PATH
+      - name: 造 AVD 并启动（arm64 + HVF）
+        run: |
+          set -x
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          export ANDROID_AVD_HOME=$HOME/.android/avd
+          mkdir -p $ANDROID_AVD_HOME
+          AVD=$ANDROID_AVD_HOME/t34.avd
+          mkdir -p $AVD
+          printf 'avd.ini.encoding=UTF-8\npath=%s\npath.rel=avd/t34.avd\ntarget=android-34\n' "$AVD" > $ANDROID_AVD_HOME/t34.ini
+          cat > $AVD/config.ini <<CFG
+          AvdId=t34
+          avd.ini.displayname=t34
+          abi.type=arm64-v8a
+          tag.id=google_apis
+          image.sysdir.1=system-images/android-34/google_apis/arm64-v8a/
+          image.androidVersion.api=34
+          hw.cpu.arch=arm64
+          hw.cpu.ncore=4
+          hw.ramSize=3072
+          disk.dataPartition.size=4096M
+          hw.lcd.width=1080
+          hw.lcd.height=1920
+          hw.lcd.density=420
+          hw.gpu.enabled=yes
+          hw.gpu.mode=swiftshader_indirect
+          hw.keyboard=yes
+          PlayStore.enabled=false
+          fastboot.forceColdBoot=yes
+          hw.audioInput=no
+          hw.audioOutput=no
+          CFG
+          $ANDROID_SDK_ROOT/emulator/emulator -list-avds
+          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd t34 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect > /tmp/emu.log 2>&1 &
+          adb start-server
+          for i in $(seq 1 90); do
+            B=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            if [ "$B" = "1" ]; then echo "BOOT_OK after $((i*5))s"; break; fi
+            sleep 5
+          done
+          adb devices
+          adb shell getprop ro.build.version.release || true
+          adb shell getprop ro.product.cpu.abi || true
+          adb shell wm size || true
+          adb shell pm list packages | wc -l || true
+          echo '--- 截屏测试 ---'
+          adb exec-out screencap -p > /tmp/shot.png && ls -l /tmp/shot.png || true
+          echo '--- emu.log 尾部 ---'
+          tail -20 /tmp/emu.log || true
